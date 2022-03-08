@@ -1,0 +1,262 @@
+---
+title: "TMDL_Rankings"
+author: "Alene Onion"
+date: "2/8/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#  {.tabset}
+
+## Impaired Waters
+
+impaired waterbodies that are not NYC reservoirs
+
+```{r, echo=FALSE, results='asis', message=FALSE, warning=FALSE}
+#merging lake id with the DOH ID
+
+rm(list=ls())
+#read in data
+#Script to read in new database
+library(tidyverse)
+# library(ggmap)
+# library(ggrepel)
+# library(rgdal)
+# library(sp)
+# library(spatialEco)
+# library(tidyverse)
+library(knitr)
+#Reading in new database
+setwd("C:/Users/leneo/Dropbox/Alene/Rscripts/Current")
+location<-read.csv("new_database/L_LOCATION.csv",na.strings=c("","NA"), stringsAsFactors=FALSE)
+lake<-read.csv("new_database/L_LAKE.csv",na.strings=c("","NA"), stringsAsFactors=FALSE)
+results<-read.csv("new_database/results.csv",na.strings=c("","NA"), stringsAsFactors=FALSE)
+setwd("C:/Users/leneo/Dropbox/Alene/Rscripts/Modeling_Workgroup")
+
+#pull lake id and names for each PWL
+lake1<-lake %>% select(LAKE_HISTORY_ID,LAKE_WATERBODY_NAME) %>% distinct()
+location1<-location %>% select(LAKE_HISTORY_ID,LOCATION_HISTORY_ID,LOCATION_PWL_ID) %>% distinct()
+locs<-merge(lake1,location1,by=c('LAKE_HISTORY_ID'),all.x=TRUE)
+
+draft<-read.csv("C:/Users/leneo/Dropbox/Alene/Rscripts/Modeling_Workgroup/2022_stayCALM_ponded_internal-draft-assessments.csv")
+draft<-draft %>% 
+  select(seg_id:parameter) %>% 
+  distinct() %>% 
+  rename(LOCATION_PWL_ID=seg_id) %>% 
+  mutate(value=1)
+
+#add names
+draft<-merge(draft,locs,by=c('LOCATION_PWL_ID'),all.x=TRUE)
+#restrict to those that have confirmed assessments
+draft<-draft %>% 
+  filter(grepl("IR5_impaired_confirmed",use_assessment)) %>% 
+  distinct()
+
+#Remove NYC reservoirs
+draft<-draft %>% filter(!(LAKE_HISTORY_ID %in% c('1302WES0067','1302BOY0076','1302EAS0089','1302BOG0086','1302MID0062','1302DIV0083','1302CRO0059',
+                                                 '1302TIT0103','1302CRO0109','1302AMA0050','1302MUS0044A','1302NEW0044',
+                                                 '1702KEN1063','1302GIL0061','1302GLE0074','1302KIR0052','1404CAN0402A','1403PEP0358A',
+                                                 '1306RON0815A','1402NEV0058B','1307ASH0848','1202SCH0638A','1301JER1042')))
+
+
+#tally results
+junk<-draft %>% 
+  select(LOCATION_PWL_ID,use,use_assessment) %>% distinct() %>% 
+  group_by(use_assessment,use) %>% 
+  summarize(n=n()) %>% 
+  ungroup() %>% 
+  spread(use_assessment,n,fill=NA)
+library(kableExtra)
+kable(junk)
+rm(list=setdiff(ls(), c("newdata",'draft','location','results')))
+```
+
+## Map
+
+The following map plots the impaired ponded waters under each designated use category.
+
+```{r, echo=FALSE, results='asis', message=FALSE, warning=FALSE}
+sites<-draft %>% select(LOCATION_PWL_ID,waterbody,use) %>% distinct()
+
+coordinates<-location %>% 
+  filter(!is.na(LOCATION_X_COORDINATE),!is.na(LOCATION_Y_COORDINATE)) %>% 
+  arrange(LOCATION_PWL_ID,LOCATION_TYPE) %>% 
+  distinct(LOCATION_PWL_ID,.keep_all = TRUE) %>% 
+  select(LOCATION_PWL_ID,LOCATION_X_COORDINATE,LOCATION_Y_COORDINATE) %>% 
+  distinct()
+sites<-merge(sites,coordinates,by=c('LOCATION_PWL_ID'),all.x = TRUE)
+
+library(ggmap)
+library(ggrepel)
+sites1<-sites %>% filter(!is.na(LOCATION_X_COORDINATE),!is.na(LOCATION_Y_COORDINATE))
+
+nybox<-make_bbox(sites1,lon=LOCATION_X_COORDINATE,lat=LOCATION_Y_COORDINATE)
+
+print(ny.map1<-qmap(nybox,source="osm",maptype="terrain",color="bw")+
+  geom_point(data=sites1,aes(x=LOCATION_X_COORDINATE,y=LOCATION_Y_COORDINATE,label=LOCATION_PWL_ID,colour=use),size=1)+
+    facet_wrap(~use))
+```
+
+Please note that several impaired waterbodies are not currently in our database:
+
+```{r, echo=FALSE, results='asis', message=FALSE, warning=FALSE}
+sites1<-sites %>% filter(is.na(LOCATION_X_COORDINATE)|is.na(LOCATION_Y_COORDINATE)) %>% 
+  select(LOCATION_PWL_ID,waterbody,use) %>% distinct()
+
+kable(sites1)
+rm(list=setdiff(ls(), c("newdata",'draft','location','results')))
+```
+
+
+## Parameters
+
+The following table lists impairment parameters and the frequency they impaired each use.
+
+```{r, echo=FALSE, results='asis', message=FALSE, warning=FALSE}
+params<-read.csv("C:/Users/leneo/Dropbox/Alene/Rscripts/Modeling_Workgroup/params.csv")
+params<-params$parameter
+nparams<-length(params)
+draft1<-draft %>% select(LOCATION_PWL_ID,LAKE_HISTORY_ID,waterbody,use,use_assessment,parameter) %>% distinct()
+for(i in 1:nparams){
+  draft1<-draft1 %>% 
+    mutate(!!as.name(params[i]):=ifelse(grepl(params[i],parameter),1,0))
+}
+draft1<-draft1 %>% 
+  gather(parameter,presence,-LOCATION_PWL_ID,-waterbody,-LAKE_HISTORY_ID,-use,-use_assessment,-parameter) %>% distinct() %>% 
+  group_by(use,parameter) %>% 
+  summarize(presence=sum(presence)) %>% 
+  ungroup() %>% 
+  filter(!is.na(presence)) %>% 
+  spread(use,presence)
+
+DT::datatable(draft1, extensions = 'Buttons', options = list(dom = 'Bfrtip',buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+
+rm(list=setdiff(ls(), c("newdata",'draft','location','draft1','results')))
+```
+## Lake Characteristics
+
+The following table details the acreage, watershed acreage, depth (from the depth profile), and % land use categories for each impaired waterbody
+
+```{r, echo=FALSE, results='asis', message=FALSE, warning=FALSE}
+#google search NLCD legend to learn what land use each VALUE_ field represents. They are given in % of total and the total acreage is given in the AreaSqKm field
+land<-read.csv("C:/Users/leneo/Dropbox/Alene/Rscripts/Modeling_Workgroup/Statewide_Lake_Watershed_NLCD_2016_percentages_NHD_LakeID.csv")
+land<-land %>% 
+  select(Lake_ID,LkAcres,AreaSqKm,Elevation,VALUE_11,VALUE_21,VALUE_22,VALUE_23,VALUE_24,VALUE_31,
+         VALUE_41,VALUE_42,VALUE_43,VALUE_52,VALUE_71,VALUE_81,VALUE_82,VALUE_90,VALUE_95) %>% distinct() %>% 
+  rename(LAKE_HISTORY_ID=Lake_ID,
+         Lake_Acres=LkAcres,
+         Watershed_Area=AreaSqKm,
+    Open_Water=VALUE_11,
+         Developed_Open_Space=VALUE_21,
+         Developed_Low_Intensity=VALUE_22,
+         Developed_Medium_Intensity=VALUE_23,
+         Developed_High_Intensity=VALUE_24,
+         Barren_Land=VALUE_31, 
+         Deciduous_Forest=VALUE_41,
+         Evergreen_Forest=VALUE_42,
+         Mixed_Forest=VALUE_43,
+         Shrub_Scrub=VALUE_52, 
+         Grasslands_Herbaceous=VALUE_71, 
+         Pasture_Hay=VALUE_81, 
+         Cultivated_Crops=VALUE_82, 
+         Woody_Wetlands=VALUE_90, 
+         Emergent_Herbaceous_Wetlands=VALUE_95)
+
+draft3<-draft %>% 
+  select(LAKE_HISTORY_ID,LOCATION_PWL_ID,waterbody,use,parameter) %>% 
+  distinct() %>% 
+  spread(use,parameter,fill=NA)
+
+depth<-results %>% select(RSLT_LOCATION_HISTORY_ID,RSLT_PROFILE_DEPTH) %>% distinct() %>% 
+  arrange(RSLT_LOCATION_HISTORY_ID,-RSLT_PROFILE_DEPTH) %>%
+  distinct(RSLT_LOCATION_HISTORY_ID,.keep_all = TRUE) %>% 
+  filter(!is.na(RSLT_PROFILE_DEPTH)) %>% 
+  rename(LOCATION_HISTORY_ID=RSLT_LOCATION_HISTORY_ID)
+lakes<-location %>% select(LAKE_HISTORY_ID,LOCATION_HISTORY_ID) %>% distinct()
+depth<-merge(depth,lakes,by=c('LOCATION_HISTORY_ID'),all.x=TRUE)
+depth<-depth %>% select(LAKE_HISTORY_ID,RSLT_PROFILE_DEPTH) %>% distinct()
+
+draft3<-merge(draft3,depth,by=c('LAKE_HISTORY_ID'),all.x=TRUE)
+draft3<-merge(draft3,land,by=c('LAKE_HISTORY_ID'),all.x=TRUE)
+
+
+rm(list=setdiff(ls(), c("newdata",'draft','location','draft1','results','draft3')))
+```
+
+Lakes impaired for water_supply_use
+
+```{r, echo=FALSE, results='asis', message=FALSE, warning=FALSE}
+water_supply<-draft3 %>% 
+  filter(!is.na(source_of_water_supply)) %>% 
+  rename(parameters=source_of_water_supply) %>% 
+  select(-fishing,-primary_contact_recreation,-secondary_contact_recreation) %>% 
+  distinct()
+DT::datatable(water_supply, extensions = 'Buttons', options = list(dom = 'Bfrtip',buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+```
+
+
+Lakes impaired for primary_contact_recreation
+
+```{r, echo=FALSE, results='asis', message=FALSE, warning=FALSE}
+Primary<-draft3 %>% 
+  filter(!is.na(primary_contact_recreation)) %>% 
+  rename(parameters=primary_contact_recreation) %>% 
+  select(-fishing,-source_of_water_supply,-secondary_contact_recreation) %>% 
+  distinct()
+DT::datatable(Primary, extensions = 'Buttons', options = list(dom = 'Bfrtip',buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+```
+
+
+Lakes impaired for secondary_contact_recreation
+
+```{r, echo=FALSE, results='asis', message=FALSE, warning=FALSE}
+Secondary<-draft3 %>% 
+  filter(!is.na(secondary_contact_recreation)) %>% 
+  rename(parameters=secondary_contact_recreation) %>% 
+  select(-fishing,-source_of_water_supply,-primary_contact_recreation) %>% 
+  distinct()
+DT::datatable(Secondary, extensions = 'Buttons', options = list(dom = 'Bfrtip',buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+```
+
+Lakes impaired for fishing
+
+```{r, echo=FALSE, results='asis', message=FALSE, warning=FALSE}
+fishing<-draft3 %>% 
+  filter(!is.na(fishing)) %>% 
+  rename(parameters=fishing) %>% 
+  select(-secondary_contact_recreation,-source_of_water_supply,-primary_contact_recreation) %>% 
+  distinct()
+DT::datatable(fishing, extensions = 'Buttons', options = list(dom = 'Bfrtip',buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+```
+
+## Phosphorus
+
+The distribution of size classes in lakes with phosphorus impairments in any designated use.
+```{r, echo=FALSE, results='asis', message=FALSE, warning=FALSE}
+phosphorus<-draft3 %>% 
+  filter(grepl("phosphorus",fishing)|
+           grepl("phosphorus",secondary_contact_recreation)|
+           grepl("phosphorus",primary_contact_recreation)|
+           grepl("phosphorus",source_of_water_supply),
+         !is.na(Lake_Acres)) %>% 
+  distinct() %>% 
+  mutate(size_class=ifelse(Lake_Acres<10,"<10",""),
+         size_class=ifelse(Lake_Acres>10&Lake_Acres<25,"10-25",size_class),
+         size_class=ifelse(Lake_Acres>25&Lake_Acres<50,"25-50",size_class),
+         size_class=ifelse(Lake_Acres>50&Lake_Acres<125,"50-125",size_class),
+         size_class=ifelse(Lake_Acres>125,">125",size_class),
+         size_class=factor(size_class,levels=c('<10','10-25','25-50','50-125','>125'))) 
+phos_size<-phosphorus %>% 
+  group_by(size_class) %>% 
+  summarize(n=n()) %>% 
+  ungroup()
+DT::datatable(phos_size, extensions = 'Buttons', options = list(dom = 'Bfrtip',buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+```
+
+All the sites with phosphorus impairment of any designated use
+```{r, echo=FALSE, results='asis', message=FALSE, warning=FALSE}
+DT::datatable(phosphorus, extensions = 'Buttons', options = list(dom = 'Bfrtip',buttons = c('copy', 'csv', 'excel', 'pdf', 'print')))
+```
